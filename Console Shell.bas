@@ -26,6 +26,14 @@ Private Type SECURITY_ATTRIBUTES
    bInheritHandle As Long
 End Type
 
+Private Type SHFILEINFO
+   hIcon As Long
+   iIcon As Long
+   dwAttributes As Long
+   szDisplayName As String * 260
+   szTypeName As String * 80
+End Type
+
 Private Type STARTUPINFO
    cb As Long
    lpReserved As String
@@ -58,11 +66,12 @@ Private Declare Function GetConsoleProcessList Lib "Kernel32.dll" (lpdwProcessLi
 Private Declare Function GetConsoleWindow Lib "Kernel32.dll" () As Long
 Private Declare Function GetCurrentProcessId Lib "Kernel32.dll" () As Long
 Private Declare Function GetFileSize Lib "Kernel32.dll" (ByVal hFile As Long, lpFileSizeHigh As Long) As Long
-Private Declare Function GetProcessImageFileNameW Lib "Psapi.dll" (ByVal hProcess As Long, ByVal lpImageFileName As Long, ByVal nSize As Long) As Long
 Private Declare Function GetStdHandle Lib "Kernel32.dll" (ByVal nStdHandle As Long) As Long
 Private Declare Function OpenProcess Lib "Kernel32.dll" (ByVal dwDesiredAccess As Long, ByVal bInheritHandle As Long, ByVal dwProcessId As Long) As Long
+Private Declare Function QueryFullProcessImageNameA Lib "Kernel32.dll" (ByVal hProcess As Long, ByVal dwFlags As Long, ByVal lpExeName As String, lpdwSize As Long) As Long
 Private Declare Function ReadFile Lib "Kernel32.dll" (ByVal hFile As Long, ByVal lpBuffer As String, ByVal nNumberOfBytesToRead As Long, lpNumberOfBytesRead As Long, ByVal lpOverlapped As Long) As Long
 Private Declare Function SetStdHandle Lib "Kernel32.dll" (ByVal nStdHandle As Long, ByVal nHandle As Long) As Long
+Private Declare Function SHGetFileInfo Lib "Shell32.dll" Alias "SHGetFileInfoA" (ByVal pszPath As Any, ByVal dwFileAttributes As Long, psfi As SHFILEINFO, ByVal cbFileInfo As Long, ByVal uFlags As Long) As Long
 Private Declare Function ShowWindow Lib "User32.dll" (ByVal hwnd As Long, ByVal nCmdShow As Long) As Long
 Private Declare Function TerminateProcess Lib "Kernel32.dll" (ByVal hProcess As Long, ByVal uExitCode As Long) As Long
 Private Declare Function WaitMessage Lib "User32.dll" () As Long
@@ -73,10 +82,10 @@ Private Const CREATE_ALWAYS As Long = &H2&
 Private Const ERROR_ALREADY_EXISTS As Long = 183
 Private Const ERROR_INVALID_HANDLE As Long = 6
 Private Const ERROR_INVALID_WINDOW_HANDLE As Long = 1400
-Private Const ERROR_MOD_NOT_FOUND As Long = 126
 Private Const ERROR_NO_MORE_FILES As Long = 18
 Private Const ERROR_SEM_NOT_FOUND As Long = 187
 Private Const ERROR_SUCCESS As Long = 0
+Private Const ERROR_TOO_MANY_POSTS As Long = 298
 Private Const FILE_ATTRIBUTE_NORMAL As Long = &H80&
 Private Const FILE_FLAG_DELETE_ON_CLOSE As Long = &H4000000
 Private Const FILE_SHARE_DELETE As Long = &H4&
@@ -86,10 +95,13 @@ Private Const FORMAT_MESSAGE_ARGUMENT_ARRAY As Long = &H2000&
 Private Const FORMAT_MESSAGE_FROM_SYSTEM As Long = &H1000&
 Private Const GENERIC_READ As Long = &H80000000
 Private Const GENERIC_WRITE As Long = &H40000000
+Private Const IMAGE_NT_SIGNATURE As Long = &H4550&
+Private Const INVALID_HANDLE_VALUE As Long = -1
 Private Const KEY_EVENT As Long = &H1
 Private Const OPEN_ALWAYS As Long = &H4
 Private Const PROCESS_ALL_ACCESS As Long = &H1F0FFF
 Private Const PROCESS_QUERY_INFORMATION As Long = &H400&
+Private Const SHGFI_EXETYPE As Long = &H2000&
 Private Const STARTF_USESTDHANDLES As Long = &H100&
 Private Const STD_ERROR_HANDLE As Long = -12
 Private Const STD_INPUT_HANDLE As Long = -10
@@ -107,10 +119,12 @@ Private Sub CheckForConsoleOutput(TextBox As Object)
 On Error GoTo ErrorTrap
 Dim BytesRead As Long
 Dim ConsoleOutput As String
+Dim OutputFileHandle As Long
 Dim OutputSize As Long
 Static PreviousOutputSize As Long
 
-   If Not OutputFile() = NO_HANDLE Then
+   OutputFileHandle = OutputFile()
+   If Not (OutputFileHandle = NO_HANDLE Or OutputFileHandle = INVALID_HANDLE_VALUE) Then
       OutputSize = CheckForError(GetFileSize(OutputFile(), CLng(0)), , ERROR_INVALID_WINDOW_HANDLE)
       If OutputSize > PreviousOutputSize Then
       
@@ -135,7 +149,7 @@ End Sub
 
 
 'This procedure checks whether an error has occurred during the most recent Windows API call.
-Private Function CheckForError(ReturnValue As Long, Optional ExtraInformation As String = Empty, Optional Ignored As Long = ERROR_SUCCESS) As Long
+Private Function CheckForError(ReturnValue As Long, Optional ExtraInformation As String = vbNullString, Optional Ignored1 As Long = ERROR_SUCCESS, Optional Ignored2 As Long = ERROR_SUCCESS) As Long
 Dim Description As String
 Dim ErrorCode As Long
 Dim Length As Long
@@ -145,7 +159,7 @@ Dim Message As String
    Err.Clear
    On Error GoTo ErrorTrap
    
-   If Not (ErrorCode = ERROR_SUCCESS Or ErrorCode = Ignored) Then
+   If Not (ErrorCode = ERROR_SUCCESS Or ErrorCode = Ignored1 Or ErrorCode = Ignored2) Then
       Description = String$(MAX_STRING, vbNullChar)
       Length = FormatMessageA(FORMAT_MESSAGE_ARGUMENT_ARRAY Or FORMAT_MESSAGE_FROM_SYSTEM, CLng(0), ErrorCode, CLng(0), Description, Len(Description), StrPtr(StrConv(ExtraInformation, vbFromUnicode)))
       If Length = 0 Then
@@ -199,9 +213,9 @@ Private Sub CreateConsole(OutputHandle As Long)
 On Error GoTo ErrorTrap
    If CheckForError(GetConsoleWindow(), , ERROR_INVALID_HANDLE) = NO_HANDLE Then
       CheckForError AllocConsole(), , ERROR_SEM_NOT_FOUND
-      CheckForError ShowWindow(GetConsoleWindow(), SW_HIDE)
-      CheckForError SetStdHandle(STD_ERROR_HANDLE, OutputHandle)
-      CheckForError SetStdHandle(STD_OUTPUT_HANDLE, OutputHandle)
+      CheckForError ShowWindow(GetConsoleWindow(), SW_HIDE), , ERROR_SEM_NOT_FOUND
+      CheckForError SetStdHandle(STD_ERROR_HANDLE, OutputHandle), , ERROR_SEM_NOT_FOUND
+      CheckForError SetStdHandle(STD_OUTPUT_HANDLE, OutputHandle), , ERROR_SEM_NOT_FOUND
    End If
 EndRoutine:
    Exit Sub
@@ -260,7 +274,7 @@ Dim Escaped As String
 Dim Index As Long
 Dim NextCharacter As String
 
-   Escaped = Empty
+   Escaped = vbNullString
    Index = 1
    Do Until Index > Len(Text)
       Character = Mid$(Text, Index, 1)
@@ -304,9 +318,9 @@ Dim ProcessIDList() As Long
       ReDim ProcessIDList(LBound(ProcessIDList()) To ProcessCount) As Long
       CheckForError GetConsoleProcessList(ProcessIDList(1), UBound(ProcessIDList()))
    End If
-   
-   GetConsoleProcessIDs = ProcessIDList()
+
 EndRoutine:
+   GetConsoleProcessIDs = ProcessIDList()
    Exit Function
    
 ErrorTrap:
@@ -314,32 +328,26 @@ ErrorTrap:
    Resume EndRoutine
 End Function
 
-
-
 'This procedure returns the path of the specified process.
-Private Function GetProcessPath(ProcessId As Long) As String
+Private Function GetProcessPath(ProcessH As Long) As String
 On Error GoTo ErrorTrap
 Dim Length As Long
 Dim Path As String
-Dim ProcessHandle As Long
+Dim ReturnValue As Long
 
-   Path = Empty
-   ProcessHandle = CheckForError(OpenProcess(PROCESS_QUERY_INFORMATION, CLng(False), ProcessId))
-   If Not ProcessHandle = NO_HANDLE Then
-      Path = String$(MAX_PATH, vbNullChar)
-      Length = CheckForError(GetProcessImageFileNameW(ProcessHandle, StrPtr(Path), Len(Path)), , ERROR_MOD_NOT_FOUND)
-      Path = Left$(Path, Length)
-      CheckForError CloseHandle(ProcessHandle)
-   End If
-   
-   GetProcessPath = Path
+   Path = String$(MAX_PATH, vbNullChar)
+   Length = Len(Path)
+   ReturnValue = CheckForError(QueryFullProcessImageNameA(ProcessH, CLng(0), Path, Length))
+   If Not ReturnValue = 0 Then Path = Left$(Path, Length)
 EndRoutine:
+   GetProcessPath = Path
    Exit Function
    
 ErrorTrap:
    HandleError
    Resume EndRoutine
 End Function
+
 
 'This procedure handles any errors that occur.
 Public Sub HandleError()
@@ -361,9 +369,25 @@ Static CurrentInputHandle As Long
 
    If CurrentInputHandle = NO_HANDLE Then CurrentInputHandle = CheckForError(GetStdHandle(STD_INPUT_HANDLE))
    
+EndRoutine:
    InputHandle = CurrentInputHandle
+   Exit Function
+   
+ErrorTrap:
+   HandleError
+   Resume EndRoutine
+End Function
+
+'This procedure checks whether the specified executable is a console process and returns the result.
+Private Function IsConsoleProcess(Path As String) As Boolean
+On Error GoTo ErrorTrap
+Dim FileInformation As SHFILEINFO
+Dim ReturnValue As Long
+
+   ReturnValue = CheckForError(SHGetFileInfo(Path, CLng(0), FileInformation, Len(FileInformation), SHGFI_EXETYPE))
    
 EndRoutine:
+   IsConsoleProcess = (((ReturnValue And &HFFFF) = IMAGE_NT_SIGNATURE) And (((ReturnValue / &H10000) And &HFFFF) = &H0&))
    Exit Function
    
 ErrorTrap:
@@ -374,6 +398,7 @@ End Function
 'This procedure gives lists the processes attached to the console.
 Public Sub ListProcesses(TextBox As Object)
 On Error GoTo ErrorTrap
+Dim ProcessHandle As Long
 Dim ProcessId As Variant
 Dim ProcessIds() As Long
 
@@ -384,7 +409,11 @@ Dim ProcessIds() As Long
       Display vbCrLf, TextBox
       Display "Processes attached to this program:" & vbCrLf, TextBox
       For Each ProcessId In ProcessIds()
-         Display CStr(ProcessId) & vbTab & GetProcessPath(CLng(ProcessId)) & vbCrLf, TextBox
+         ProcessHandle = CheckForError(OpenProcess(PROCESS_QUERY_INFORMATION, CLng(False), ProcessId))
+         If Not ProcessHandle = NO_HANDLE Then
+            Display CStr(ProcessId) & vbTab & GetProcessPath(CLng(ProcessHandle)) & vbCrLf, TextBox
+            CheckForError CloseHandle(ProcessHandle)
+         End If
       Next ProcessId
    End If
 EndRoutine:
@@ -406,7 +435,7 @@ On Error GoTo ErrorTrap
    
    Do While DoEvents() > 0
       CheckForConsoleOutput InterfaceWindow.ConsoleOutputBox
-      CheckForError WaitMessage()
+      CheckForError WaitMessage(), , ERROR_INVALID_WINDOW_HANDLE
    Loop
    
 EndRoutine:
@@ -426,8 +455,8 @@ Static CurrentOutputBufferSize As Long
 
    If Not NewOutputBufferSize = Empty Then CurrentOutputBufferSize = NewOutputBufferSize
    
-   OutputBufferSize = CurrentOutputBufferSize
 EndRoutine:
+   OutputBufferSize = CurrentOutputBufferSize
    Exit Function
    
 ErrorTrap:
@@ -452,12 +481,19 @@ Static CurrentOutputWriteHandle As Long
       Security.nLength = Len(Security)
       
       CurrentOutputWriteHandle = CheckForError(CreateFileA(Path, GENERIC_WRITE, FILE_SHARE_DELETE Or FILE_SHARE_READ Or FILE_SHARE_WRITE, Security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL Or FILE_FLAG_DELETE_ON_CLOSE, CLng(0)), , ERROR_ALREADY_EXISTS)
-      CurrentOutputReadHandle = CheckForError(CreateFileA(Path, GENERIC_READ, FILE_SHARE_DELETE Or FILE_SHARE_READ Or FILE_SHARE_WRITE, Security, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, CLng(0)), , ERROR_ALREADY_EXISTS)
+      
+      If CurrentOutputWriteHandle = INVALID_HANDLE_VALUE Then
+         CurrentOutputReadHandle = INVALID_HANDLE_VALUE
+      Else
+         CurrentOutputReadHandle = CheckForError(CreateFileA(Path, GENERIC_READ, FILE_SHARE_DELETE Or FILE_SHARE_READ Or FILE_SHARE_WRITE, Security, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, CLng(0)), , ERROR_ALREADY_EXISTS)
+      End If
+      
+      If CurrentOutputReadHandle = INVALID_HANDLE_VALUE Or CurrentOutputWriteHandle = INVALID_HANDLE_VALUE Then MsgBox "Could not create a console output capture file.", vbExclamation
    End If
    
+EndRoutine:
    OutputWriteHandle = CurrentOutputWriteHandle
    OutputFile = CurrentOutputReadHandle
-EndRoutine:
    Exit Function
    
 ErrorTrap:
@@ -480,8 +516,8 @@ Dim OutputWriteHandle As Long
    OutputReadHandle = OutputFile(OutputWriteHandle)
    
    If Not CheckForError(GetConsoleWindow()) = NO_HANDLE Then CheckForError FreeConsole(), , ERROR_INVALID_HANDLE
-   If Not OutputFile() = NO_HANDLE Then CheckForError CloseHandle(OutputReadHandle)
-   If Not OutputWriteHandle = NO_HANDLE Then CheckForError CloseHandle(OutputWriteHandle)
+   If Not OutputFile() = NO_HANDLE Then CheckForError CloseHandle(OutputReadHandle), , ERROR_INVALID_HANDLE
+   If Not OutputWriteHandle = NO_HANDLE Then CheckForError CloseHandle(OutputWriteHandle), , ERROR_INVALID_HANDLE
 EndRoutine:
    Exit Sub
    
@@ -495,13 +531,14 @@ Public Sub StartProcess(Path As String)
 On Error GoTo ErrorTrap
 Dim OutputWriteHandle As Long
 Dim ProcessInformation As PROCESS_INFORMATION
+Dim ReturnValue As Long
 Dim Security As SECURITY_ATTRIBUTES
 Dim StartUpInformation As STARTUPINFO
 
-   If Not Path = Empty Then
+   If Not Path = vbNullString Then
       If Left$(Path, 1) = """" Then Path = Mid$(Path, 2)
       If Right$(Path, 1) = """" Then Path = Left$(Path, Len(Path) - 1)
-      
+
       OutputFile OutputWriteHandle
       
       Security.bInheritHandle = True
@@ -512,7 +549,11 @@ Dim StartUpInformation As STARTUPINFO
       StartUpInformation.hStdInput = InputHandle()
       StartUpInformation.hStdOutput = OutputWriteHandle
       
-      CheckForError CreateProcessA(vbNullString, Path, Security, Security, CLng(True), CLng(0), CLng(0), vbNullString, StartUpInformation, ProcessInformation), Path, ERROR_NO_MORE_FILES
+      ReturnValue = CheckForError(CreateProcessA(vbNullString, Path, Security, Security, CLng(True), CLng(0), CLng(0), vbNullString, StartUpInformation, ProcessInformation), Path, ERROR_NO_MORE_FILES, ERROR_TOO_MANY_POSTS)
+      If Not ReturnValue = 0 Then
+         Path = GetProcessPath(ProcessInformation.hProcess)
+         If Not IsConsoleProcess(Path) Then MsgBox """" & Path & """ is not a console application and cannot interact with " & App.Title & ".", vbExclamation
+      End If
    End If
 EndRoutine:
    Exit Sub
@@ -521,6 +562,7 @@ ErrorTrap:
    HandleError
    Resume EndRoutine
 End Sub
+
 
 'This procedure converts any escape sequences in the specified text to characters.
 Public Function Unescape(Text As String, Optional EscapeCharacter As String = "/", Optional ErrorAt As Long = 0) As String
@@ -533,7 +575,7 @@ Dim Unescaped As String
 
    ErrorAt = 0
    Index = 1
-   Unescaped = Empty
+   Unescaped = vbNullString
    Do Until Index > Len(Text)
       Character = Mid$(Text, Index, 1)
       NextCharacter = Mid$(Text, Index + 1, 1)
@@ -565,8 +607,8 @@ Dim Unescaped As String
       Index = Index + 1
    Loop
    
-   Unescape = Unescaped
 EndRoutine:
+   Unescape = Unescaped
    Exit Function
    
 ErrorTrap:

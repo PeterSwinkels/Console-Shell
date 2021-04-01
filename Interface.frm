@@ -34,13 +34,14 @@ Begin VB.Form InterfaceWindow
       Left            =   3600
       TabIndex        =   1
       TabStop         =   0   'False
+      ToolTipText     =   "Send the input to a console application."
       Top             =   2400
       Width           =   975
    End
    Begin VB.TextBox ConsoleInputBox 
       BeginProperty Font 
          Name            =   "Terminal"
-         Size            =   9
+         Size            =   13.5
          Charset         =   255
          Weight          =   400
          Underline       =   0   'False
@@ -53,13 +54,14 @@ Begin VB.Form InterfaceWindow
       ScrollBars      =   3  'Both
       TabIndex        =   0
       TabStop         =   0   'False
+      ToolTipText     =   "Specify the input for a console application here."
       Top             =   2160
       Width           =   3375
    End
    Begin VB.TextBox ConsoleOutputBox 
       BeginProperty Font 
          Name            =   "Terminal"
-         Size            =   9
+         Size            =   13.5
          Charset         =   255
          Weight          =   400
          Underline       =   0   'False
@@ -73,6 +75,7 @@ Begin VB.Form InterfaceWindow
       ScrollBars      =   3  'Both
       TabIndex        =   2
       TabStop         =   0   'False
+      ToolTipText     =   "Display's a console application's output."
       Top             =   120
       Width           =   4455
    End
@@ -123,17 +126,17 @@ Attribute VB_GlobalNameSpace = False
 Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
-'This module contains the main interface window.
+'This module contains this program's main interface window.
 Option Explicit
 
 
 
-'This procedure manages the user's input history.
-Private Function LastInput(Optional NewLastInput As String = Empty) As String
+'This procedure stores the last input by the user and returns it.
+Private Function LastInput(Optional NewLastInput As String = vbNullString) As String
 On Error GoTo ErrorTrap
 Static CurrentLastInput As String
 
-   If Not NewLastInput = Empty Then CurrentLastInput = NewLastInput
+   If Not NewLastInput = vbNullString Then CurrentLastInput = NewLastInput
    
 EndRoutine:
    LastInput = CurrentLastInput
@@ -145,11 +148,11 @@ ErrorTrap:
 End Function
 
 'This procedure manages the last started process and gives the command to start any new process specified.
-Private Function LastStartedProcess(Optional NewStartedProcess As String = Empty) As String
+Private Function LastStartedProcess(Optional NewStartedProcess As String = vbNullString) As String
 On Error GoTo ErrorTrap
 Static CurrentStartedProcess As String
 
-   If Not NewStartedProcess = Empty Then
+   If Not NewStartedProcess = vbNullString Then
       CurrentStartedProcess = NewStartedProcess
       StartProcess NewStartedProcess
    End If
@@ -167,7 +170,7 @@ End Function
 'This procedure clears the console output box.
 Private Sub ClearOutputMenu_Click()
 On Error GoTo ErrorTrap
-   ConsoleOutputBox.Text = Empty
+   ConsoleOutputBox.Text = vbNullString
 EndRoutine:
    Exit Sub
    
@@ -181,13 +184,13 @@ Private Sub EnterButton_Click()
 On Error GoTo ErrorTrap
 Dim ErrorAt As Long
 
-   If Not ConsoleInputBox.Text = Empty Then
+   If Not ConsoleInputBox.Text = vbNullString Then
       LastInput NewLastInput:=Unescape(ConsoleInputBox.Text, , ErrorAt)
       If ErrorAt > 0 Then
          MsgBox "Bad escape sequence at character #" & CStr(ErrorAt) & ".", vbExclamation
       Else
          If UBound(GetConsoleProcessIDs()) > 1 Then
-            ConsoleInputBox.Text = Empty
+            ConsoleInputBox.Text = vbNullString
             Display LastInput() & vbCrLf, ConsoleOutputBox
             WriteToConsole LastInput()
          Else
@@ -215,8 +218,8 @@ On Error GoTo ErrorTrap
    Me.Width = Screen.Width / 1.1
    Me.Height = Screen.Height / 1.1
    
-   LastInput NewLastInput:=Empty
-   LastStartedProcess NewStartedProcess:=Empty
+   LastInput NewLastInput:=vbNullString
+   LastStartedProcess NewStartedProcess:=vbNullString
 EndRoutine:
    Exit Sub
    
@@ -327,7 +330,7 @@ ErrorTrap:
    Resume EndRoutine
 End Sub
 
-'This procedure gives the command to start the specified process.
+'This procedure gives the command to start the process specified by the user.
 Private Sub StartProcessMenu_Click()
 On Error GoTo ErrorTrap
 Dim Path As String
